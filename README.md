@@ -1,7 +1,7 @@
 # Automatic nozzle wiping for Bambu Studio
 
 > [!IMPORTANT]
-> The script requires a compatible printer profile and the firmware wiping commands described in the Safety section below.
+> The script currently supports only **Bambu Lab P2S** printers.
 >
 > **Windows only:** the current setup uses Windows PowerShell and is not supported on macOS or Linux.
 
@@ -31,7 +31,7 @@ Before making any changes, the script checks the sliced G-code. If the print is 
 The script currently requires:
 
 - Windows with Windows PowerShell;
-- a compatible printer and firmware;
+- a Bambu Lab P2S printer;
 - a 256 x 256 mm printable area starting at X0 Y0;
 - layer-by-layer printing;
 - spiral vase mode disabled;
