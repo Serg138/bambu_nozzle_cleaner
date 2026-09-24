@@ -2,6 +2,8 @@
 
 > [!IMPORTANT]
 > The script currently supports only **Bambu Lab P1S and P2S** printers.
+>
+> **Windows only:** the current setup uses Windows PowerShell and is not supported on macOS or Linux.
 
 ## Support development
 
@@ -21,9 +23,24 @@ The script works with a 256 x 256 mm printable area whose origin is X0 Y0. It su
 
 Before making any changes, the script checks the sliced G-code. If the print is unsupported or a safe wiping cycle cannot be confirmed, processing stops with an error.
 
-## Setup
+## Supported print conditions
 
-The commands below are for Windows only.
+The script currently requires:
+
+- Windows with Windows PowerShell;
+- a Bambu Lab P1S or P2S printer;
+- a 256 x 256 mm printable area starting at X0 Y0;
+- layer-by-layer printing;
+- spiral vase mode disabled;
+- firmware retraction disabled;
+- a single-filament print without tool changes;
+- G-code movements and retraction that the script can reconstruct safely.
+
+The script validates return coordinates, clearance above the printed layer, printable height, coordinate and extrusion modes, and previously inserted wiping blocks. Running it repeatedly with the same settings does not duplicate wiping cycles.
+
+If validation fails, the script reports an error instead of modifying the G-code.
+
+## Setup
 
 1. Save `ImplementWipePostProcess.ps1` in a permanent location on your computer.
 2. In Bambu Studio, open **Process → Others → Post-processing scripts**. Enable advanced settings if needed.
@@ -96,21 +113,6 @@ By default, the script reads the target retraction from `filament_retraction_len
 To specify another target, use `-WipeRetractMm`. The accepted range is 0–2 mm.
 
 Between layers, the script reuses the slicer's existing retraction whenever possible. If additional retraction is needed, it adds only the missing amount and compensates for it before extrusion resumes.
-
-## Supported print conditions
-
-The script requires:
-
-- a 256 x 256 mm printable area starting at X0 Y0;
-- layer-by-layer printing;
-- spiral vase mode disabled;
-- firmware retraction disabled;
-- a single-filament print without tool changes;
-- G-code movements and retraction that the script can reconstruct safely.
-
-The script validates return coordinates, clearance above the printed layer, printable height, coordinate and extrusion modes, and previously inserted wiping blocks. Running it repeatedly with the same settings does not duplicate wiping cycles.
-
-If validation fails, the script reports an error instead of modifying the G-code.
 
 ## Safety
 
