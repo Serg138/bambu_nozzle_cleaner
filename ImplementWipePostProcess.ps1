@@ -73,15 +73,17 @@ if ([double]::IsNaN($targetRetract) -or [double]::IsInfinity($targetRetract) -or
     throw 'Wipe retraction target must be between 0 and 2 mm.'
 }
 $retractTag = Format-Number $targetRetract
-$settingsTag = "routine_rev=8 layer_interval=$LayerInterval early_layers=$EarlyWipeAfterLayers retract_mm=$retractTag"
-# Keep the legacy marker prefix so previously processed G-code is recognized on repeated Studio calls.
-$beginCount = [regex]::Matches($gcode, '(?m)^; P2S_PETG_WIPE_BEGIN(?:\s|$)').Count
-$endCount = [regex]::Matches($gcode, '(?m)^; P2S_PETG_WIPE_END\r?$').Count
-if ($beginCount -ne $endCount) { throw 'Incomplete P2S PETG wipe block found in G-code.' }
-$existingBlocks = [regex]::Matches($gcode, '(?ms)^; P2S_PETG_WIPE_BEGIN[^\r\n]*\r?\n(.*?)^; P2S_PETG_WIPE_END\r?$')
-if ($existingBlocks.Count -ne $beginCount) { throw 'Malformed or nested P2S PETG wipe block found in G-code.' }
-if ($beginCount -eq 0 -and $gcode -match '(?m)^; P2S_PETG_WIPE_(?:RESUME|PRIME)\b') {
-    throw 'Orphaned P2S PETG resume or prime marker found in G-code.'
+$settingsTag = "routine_rev=9 layer_interval=$LayerInterval early_layers=$EarlyWipeAfterLayers retract_mm=$retractTag"
+if ($gcode -match '(?m)^; (?!NOZZLE_WIPE_)[A-Z][A-Z0-9_]*_WIPE_(?:BEGIN|END|RESUME|PRIME)\b') {
+    throw 'Obsolete nozzle wipe markers found in G-code. Slice the original model again.'
+}
+$beginCount = [regex]::Matches($gcode, '(?m)^; NOZZLE_WIPE_BEGIN(?:\s|$)').Count
+$endCount = [regex]::Matches($gcode, '(?m)^; NOZZLE_WIPE_END\r?$').Count
+if ($beginCount -ne $endCount) { throw 'Incomplete nozzle wipe block found in G-code.' }
+$existingBlocks = [regex]::Matches($gcode, '(?ms)^; NOZZLE_WIPE_BEGIN[^\r\n]*\r?\n(.*?)^; NOZZLE_WIPE_END\r?$')
+if ($existingBlocks.Count -ne $beginCount) { throw 'Malformed or nested nozzle wipe block found in G-code.' }
+if ($beginCount -eq 0 -and $gcode -match '(?m)^; NOZZLE_WIPE_(?:RESUME|PRIME)\b') {
+    throw 'Orphaned nozzle wipe resume or prime marker found in G-code.'
 }
 
 function New-WipeBlock([string] $label, [double] $x, [double] $y, [double] $z, [double] $feed, [double] $accel, [double] $printedHeight, [double] $extraRetract, [int] $repeats, [bool] $layerTransition = $false) {
@@ -105,7 +107,7 @@ function New-WipeBlock([string] $label, [double] $x, [double] $y, [double] $z, [
     $oldAccel = Format-Number $accel
     $returnZ = if ($layerTransition) { $safeZ } else { $sz }
     $block = [Collections.Generic.List[string]]::new()
-    $block.Add("; P2S_PETG_WIPE_BEGIN $label repeats=$repeats extra_retract_mm=$(Format-Number $extraRetract) return_X=$sx return_Y=$sy return_Z=$returnZ old_feed=$oldFeed old_accel=$oldAccel printed_height=$(Format-Number $printedHeight)")
+    $block.Add("; NOZZLE_WIPE_BEGIN $label repeats=$repeats extra_retract_mm=$(Format-Number $extraRetract) return_X=$sx return_Y=$sy return_Z=$returnZ old_feed=$oldFeed old_accel=$oldAccel printed_height=$(Format-Number $printedHeight)")
     $block.Add('M400'); $block.Add('G90'); $block.Add('M83')
     if ($extraRetract -gt 0.0005) { $block.Add("G1 E-$(Format-Number $extraRetract) F1800") }
     $block.Add("G1 Z$safeZ F1200")
@@ -123,7 +125,7 @@ function New-WipeBlock([string] $label, [double] $x, [double] $y, [double] $z, [
     }
     $block.Add("G1 F$oldFeed")
     $block.Add("M204 S$oldAccel")
-    $block.Add('; P2S_PETG_WIPE_END')
+    $block.Add('; NOZZLE_WIPE_END')
     $block
 }
 
@@ -135,10 +137,10 @@ if ($beginCount -gt 0) {
         if (-not $marker.Contains($settingsTag)) {
             throw 'Wipe settings differ from the existing G-code. Slice the original model again.'
         }
-        $blockPattern = '^; P2S_PETG_WIPE_BEGIN ' + [regex]::Escape($settingsTag) +
+        $blockPattern = '^; NOZZLE_WIPE_BEGIN ' + [regex]::Escape($settingsTag) +
             ' (layer_index|top_surface_layer_index)=(\d+) repeats=([23]) extra_retract_mm=([\d.]+) return_X=([\d.]+) return_Y=([\d.]+) return_Z=([\d.]+) old_feed=([\d.]+) old_accel=([\d.]+) printed_height=([\d.]+)$'
         $fields = [regex]::Match($marker, $blockPattern)
-        if (-not $fields.Success) { throw 'Malformed P2S PETG wipe marker found in G-code.' }
+        if (-not $fields.Success) { throw 'Malformed nozzle wipe marker found in G-code.' }
         $kind = $fields.Groups[1].Value
         $layerIndex = [int]$fields.Groups[2].Value
         $repeats = [int]$fields.Groups[3].Value
@@ -153,17 +155,17 @@ if ($beginCount -gt 0) {
         $originalZ = if ($isBoundary) { $returnZ - 3.0 } else { $returnZ }
         $expected = @(New-WipeBlock "$settingsTag $kind=$layerIndex" $returnX $returnY $originalZ $oldFeed $oldAccel $printed $extra $repeats $isBoundary) -join "`n"
         if (($block.Value -replace "`r`n", "`n") -cne $expected) {
-            throw 'Incomplete or modified P2S PETG wipe movements found in G-code.'
+            throw 'Incomplete or modified nozzle wipe movements found in G-code.'
         }
         if (-not $isBoundary) { continue }
         $boundaryCount++
         $following = $gcode.Substring($block.Index + $block.Length)
         $nextLayer = [regex]::Match($following, '(?m)^; CHANGE_LAYER\r?$')
-        if (-not $nextLayer.Success) { throw 'Missing next layer after P2S PETG wipe.' }
+        if (-not $nextLayer.Success) { throw 'Missing next layer after nozzle wipe.' }
         $following = $following.Substring(0, $nextLayer.Index)
-        $resume = [regex]::Matches($following, '(?m)^; P2S_PETG_WIPE_RESUME layer_index=(\d+) travel_Z=([\d.]+) travel_feed=([\d.]+)\r?$')
+        $resume = [regex]::Matches($following, '(?m)^; NOZZLE_WIPE_RESUME layer_index=(\d+) travel_Z=([\d.]+) travel_feed=([\d.]+)\r?$')
         if ($resume.Count -ne 1 -or [int]$resume[0].Groups[1].Value -ne $layerIndex) {
-            throw 'Missing or duplicated next-layer resume after P2S PETG wipe.'
+            throw 'Missing or duplicated next-layer resume after nozzle wipe.'
         }
         $travelZ = Parse-Number $resume[0].Groups[2].Value
         $travelFeed = Parse-Number $resume[0].Groups[3].Value
@@ -172,30 +174,30 @@ if ($beginCount -gt 0) {
             $resumeText.Count -lt 3 -or
             $resumeText[1] -cne "G1 Z$(Format-Number $travelZ) F1200" -or
             $resumeText[2] -cne "G1 F$(Format-Number $travelFeed)") {
-            throw 'Incomplete next-layer Z resume after P2S PETG wipe.'
+            throw 'Incomplete next-layer Z resume after nozzle wipe.'
         }
-        $primes = [regex]::Matches($following, '(?m)^; P2S_PETG_WIPE_PRIME layer_index=(\d+) E=([\d.]+) feed=([\d.]+)\r?$')
+        $primes = [regex]::Matches($following, '(?m)^; NOZZLE_WIPE_PRIME layer_index=(\d+) E=([\d.]+) feed=([\d.]+)\r?$')
         if ($extra -gt 0.0005) {
             if ($primes.Count -ne 1 -or [int]$primes[0].Groups[1].Value -ne $layerIndex -or
                 $primes[0].Index -le $resume[0].Index -or
                 [Math]::Abs((Parse-Number $primes[0].Groups[2].Value) - $extra) -gt 0.0005) {
-                throw 'Missing or mismatched deferred prime after P2S PETG wipe.'
+                throw 'Missing or mismatched deferred prime after nozzle wipe.'
             }
             $primeFeed = Parse-Number $primes[0].Groups[3].Value
             $primeText = $following.Substring($primes[0].Index) -split "`r?`n"
             if ($primeFeed -le 0 -or $primeText.Count -lt 3 -or
                 $primeText[1] -cne "G1 E$(Format-Number $extra) F1800" -or
                 $primeText[2] -cne "G1 F$(Format-Number $primeFeed)") {
-                throw 'Incomplete deferred prime after P2S PETG wipe.'
+                throw 'Incomplete deferred prime after nozzle wipe.'
             }
             $primeCount++
         } elseif ($primes.Count -ne 0) {
-            throw 'Unexpected deferred prime after P2S PETG wipe.'
+            throw 'Unexpected deferred prime after nozzle wipe.'
         }
     }
-    if ([regex]::Matches($gcode, '(?m)^; P2S_PETG_WIPE_RESUME\b').Count -ne $boundaryCount -or
-        [regex]::Matches($gcode, '(?m)^; P2S_PETG_WIPE_PRIME\b').Count -ne $primeCount) {
-        throw 'Orphaned P2S PETG resume or prime marker found in G-code.'
+    if ([regex]::Matches($gcode, '(?m)^; NOZZLE_WIPE_RESUME\b').Count -ne $boundaryCount -or
+        [regex]::Matches($gcode, '(?m)^; NOZZLE_WIPE_PRIME\b').Count -ne $primeCount) {
+        throw 'Orphaned nozzle wipe resume or prime marker found in G-code.'
     }
     Write-Output 'Wipes already present; upload copy left unchanged.'
     exit 0
@@ -396,7 +398,7 @@ for ($lineIndex = 0; $lineIndex -lt $lines.Count; $lineIndex++) {
             } else {
                 throw "Unsupported layer travel after wipe at line $($lineIndex + 1)."
             }
-            $replacementLines = @("; P2S_PETG_WIPE_RESUME layer_index=$resumeLayer travel_Z=$(Format-Number $travelZ) travel_feed=$(Format-Number $travelFeed)") + $replacementLines
+            $replacementLines = @("; NOZZLE_WIPE_RESUME layer_index=$resumeLayer travel_Z=$(Format-Number $travelZ) travel_feed=$(Format-Number $travelFeed)") + $replacementLines
             $resumeAtTravel = $false
         }
     }
@@ -407,7 +409,7 @@ for ($lineIndex = 0; $lineIndex -lt $lines.Count; $lineIndex++) {
             if ($nextEMm -lt 0) { throw 'Unexpected second retract before deferred prime.' }
             if ($nextEMm -gt 0) {
                 if ($resumeAtTravel -or -not $relativeE -or $null -eq $feed -or $feed -le 0) { throw 'Cannot prime safely before next-layer extrusion.' }
-                $out.Add("; P2S_PETG_WIPE_PRIME layer_index=$resumeLayer E=$(Format-Number $deferredPrime) feed=$(Format-Number $feed)")
+                $out.Add("; NOZZLE_WIPE_PRIME layer_index=$resumeLayer E=$(Format-Number $deferredPrime) feed=$(Format-Number $feed)")
                 $out.Add("G1 E$(Format-Number $deferredPrime) F1800")
                 $out.Add("G1 F$(Format-Number $feed)")
                 $deferredPrime = 0.0
