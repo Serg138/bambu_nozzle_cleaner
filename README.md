@@ -23,6 +23,9 @@ The script works with a 256 x 256 mm printable area whose origin is X0 Y0. It su
 
 Before making any changes, the script checks the sliced G-code. If the print is unsupported or a safe wiping cycle cannot be confirmed, processing stops with an error.
 
+> [!NOTE]
+> On large models, processing the sliced G-code may take several minutes. This is expected—please do not panic or try to disable or interrupt the script while it is running.
+
 ## Supported print conditions
 
 The script currently requires:
