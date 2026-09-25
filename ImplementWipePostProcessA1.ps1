@@ -30,7 +30,7 @@ function Require-Header([string] $key, [string] $value) {
     if ($actual -ne $value) { throw "Unsupported G-code setting: $key = $actual (expected $value)." }
 }
 
-Require-Header 'printer_model' 'Bambu Lab P2S'
+Require-Header 'printer_model' 'Bambu Lab A1'
 $printableArea = Get-Header 'printable_area'
 $areaPoints = $printableArea -split '\s*,\s*'
 if ($areaPoints.Count -lt 4) { throw 'Unsupported printable area: expected a 256 x 256 mm build plate.' }
@@ -75,7 +75,7 @@ if ([double]::IsNaN($targetRetract) -or [double]::IsInfinity($targetRetract) -or
     throw 'Wipe retraction target must be between 0 and 2 mm.'
 }
 $retractTag = Format-Number $targetRetract
-$settingsTag = "routine_rev=9 layer_interval=$LayerInterval early_layers=$EarlyWipeAfterLayers retract_mm=$retractTag"
+$settingsTag = "printer=A1 routine_rev=1 layer_interval=$LayerInterval early_layers=$EarlyWipeAfterLayers retract_mm=$retractTag"
 if ($gcode -match '(?m)^; (?!NOZZLE_WIPE_)[A-Z][A-Z0-9_]*_WIPE_(?:BEGIN|END|RESUME|PRIME)\b') {
     throw 'Obsolete nozzle wipe markers found in G-code. Slice the original model again.'
 }
@@ -113,10 +113,18 @@ function New-WipeBlock([string] $label, [double] $x, [double] $y, [double] $z, [
     $block.Add('M400'); $block.Add('G90'); $block.Add('M83')
     if ($extraRetract -gt 0.0005) { $block.Add("G1 E-$(Format-Number $extraRetract) F1800") }
     $block.Add("G1 Z$safeZ F1200")
-    $block.Add('M400'); $block.Add('G150.3')
+    # Use the A1 side purge wiper, which Bambu Studio accesses during filament changes.
+    # Approach at Z clearance, then pass the wiper at X -48.2 to -38.2.
+    $block.Add('M400')
+    $block.Add('M204 S9000')
+    $block.Add('G1 Y128 F9000')
+    $block.Add('G1 X0 F18000')
+    $block.Add('G1 X-48.2 F3000')
     for ($i = 0; $i -lt $repeats; $i++) {
-        $block.Add('G150.1 F8000')
+        $block.Add('G1 X-38.2 F18000')
+        $block.Add('G1 X-48.2 F3000')
     }
+    $block.Add('G1 X0 F18000')
     $block.Add('M400')
     $block.Add('G90'); $block.Add('M83')
     $block.Add("G1 Z$safeZ F1200")
@@ -273,8 +281,10 @@ $endGcode = $false
 $insideWipeTower = $false
 $conditionalDepth = 0
 $skippableDepth = 0
+$skipTypes = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $boundaryWiped = $false
 $topSurfaceSeen = $false
+$pendingTopSurfaceLayer = $null
 $retractedAmount = $null
 $printedHeight = $null
 $pendingBoundaryIndex = $null
@@ -311,11 +321,59 @@ for ($lineIndex = 0; $lineIndex -lt $lines.Count; $lineIndex++) {
     $line = $lines[$lineIndex]
     $code = ($line -split ';', 2)[0].Trim()
     if ($line -match '^; MACHINE_END_GCODE_START\s*$') { $endGcode = $true }
-    if ($line -match '^; SKIPPABLE_START\s*$') { $skippableDepth++ }
-    if ($line -match '^; SKIPPABLE_END\s*$') {
-        if ($skippableDepth -eq 0) { throw 'Unmatched SKIPPABLE_END in G-code.' }
-        $skippableDepth--
+    if ($line -match '^; SKIPPABLE_START\s*$') {
+        if ($skippableDepth -ne 0 -or $conditionalDepth -ne 0 -or $resumeAtTravel -or
+            -not $absoluteXYZ -or -not $relativeE -or -not $millimeters) {
+            throw "Cannot establish safe state at A1 optional block on line $($lineIndex + 1)."
+        }
+        $skippableDepth = 1
+        $skipTypes.Clear()
+        $out.Add($line)
+        continue
     }
+    if ($skippableDepth -gt 0) {
+        if ($line -match '^; SKIPPABLE_END\s*$') {
+            if ($conditionalDepth -ne 0 -or -not $skipTypes.Contains('timelapse') -or
+                -not $skipTypes.Contains('head_wrap_detect')) {
+                throw "Incomplete stock A1 optional block on line $($lineIndex + 1)."
+            }
+            # Every branch leaves G90/M83 and relative E unchanged. Its position,
+            # feed, and acceleration depend on firmware flags, so require later
+            # unconditional G-code to establish them before inserting a wipe.
+            $skippableDepth = 0
+            $x = $null; $y = $null; $z = $null
+            $feed = $null; $accel = $null
+            $out.Add($line)
+            continue
+        }
+        if ($line -match '^; SKIPTYPE: (\S+)\s*$') {
+            if ($Matches[1] -notin @('timelapse', 'head_wrap_detect')) {
+                throw "Unsupported A1 optional block type on line $($lineIndex + 1)."
+            }
+            [void]$skipTypes.Add($Matches[1])
+        }
+        if ($code -match '^M622(?:\s|$)') { $conditionalDepth++ }
+        if ($code -match '^M623(?:\s|$)') {
+            if ($conditionalDepth -eq 0) { throw 'Unmatched M623 in A1 optional block.' }
+            $conditionalDepth--
+        }
+        if ($code -match '^G(?:0|1)(?:\s|$)') {
+            if ($code -match '(?<![A-Za-z])E[-+\d.]') {
+                throw "Extrusion inside an A1 optional block cannot be modeled on line $($lineIndex + 1)."
+            }
+        } elseif ($code -match '^G92(?:\s|$)') {
+            if ($code -notmatch '^G92\s+E[-+]?(?:\d+(?:\.\d*)?|\.\d+)\s*$') {
+                throw "Unsupported coordinate reset in an A1 optional block on line $($lineIndex + 1)."
+            }
+        } elseif ($code -match '^(?:G91|M82)(?:\s|$)') {
+            throw "XYZ or extrusion mode changes inside an A1 optional block on line $($lineIndex + 1)."
+        } elseif ($code -ne '' -and $code -notmatch '^(?:G90|M83|M622|M622\.1|M623|M1002|M1004|M106|M204|M400|M971|M73|G39|G39\.3|G392)(?:\s|$)') {
+            throw "Unsupported A1 optional command on line $($lineIndex + 1): $code"
+        }
+        $out.Add($line)
+        continue
+    }
+    if ($line -match '^; SKIPPABLE_END\s*$') { throw 'Unmatched SKIPPABLE_END in G-code.' }
     if ($code -match '^M622(?:\s|$)') { $conditionalDepth++ }
     if ($code -match '^M623(?:\s|$)') {
         if ($conditionalDepth -eq 0) { throw 'Unmatched M623 in G-code.' }
@@ -337,6 +395,7 @@ for ($lineIndex = 0; $lineIndex -lt $lines.Count; $lineIndex++) {
     if (-not $endGcode -and $line -match '^; CHANGE_LAYER\s*$') {
         if ($conditionalDepth -ne 0 -or $skippableDepth -ne 0) { throw 'Layer boundary inside an optional G-code block.' }
         if ($insideWipeTower) { throw 'Layer boundary found inside a wipe tower section.' }
+        if ($null -ne $pendingTopSurfaceLayer) { throw 'No printable top-surface extrusion followed its feature marker.' }
         $layer++
         $boundaryWiped = $false
         $topSurfaceSeen = $false
@@ -358,14 +417,28 @@ for ($lineIndex = 0; $lineIndex -lt $lines.Count; $lineIndex++) {
         }
         # A layer may contain multiple separate top-surface islands.
         $topSurfaceSeen = $true
-        if (-not $boundaryWiped) {
-            if (-not $absoluteXYZ -or -not $relativeE -or -not $millimeters -or $null -eq $x -or $null -eq $y -or $null -eq $z -or $null -eq $feed -or $null -eq $accel -or $null -eq $printedHeight -or $null -eq $retractedAmount) {
+        if (-not $boundaryWiped) { $pendingTopSurfaceLayer = $layer }
+    }
+    if ($null -ne $pendingTopSurfaceLayer) {
+        if ($line -match '^; FEATURE:' -and $line -notmatch '^; FEATURE:\s*Top surface\s*$') {
+            throw 'No printable top-surface extrusion followed its feature marker.'
+        }
+        # Wait for the first top-surface extrusion. Studio can restore M204 only
+        # after the feature marker, particularly after optional timelapse motion.
+        $topE = [regex]::Match($code, '(?<![A-Za-z])E([-+]?(?:\d+(?:\.\d*)?|\.\d+))(?:\s|$)')
+        if ($code -match '^G(?:0|1|2|3)(?:\s|$)' -and $topE.Success -and
+            (Parse-Number $topE.Groups[1].Value) -gt 0 -and
+            $code -match '(?<![A-Za-z])[XY][-+\d.]') {
+            if (-not $absoluteXYZ -or -not $relativeE -or -not $millimeters -or
+                $null -eq $x -or $null -eq $y -or $null -eq $z -or $null -eq $feed -or
+                $null -eq $accel -or $null -eq $printedHeight -or $null -eq $retractedAmount) {
                 throw "Cannot establish safe XYZ/E/feed state before top surface on layer index $layer."
             }
             $extraRetract = [Math]::Max(0.0, $targetRetract - $retractedAmount)
             foreach ($cmd in (New-WipeBlock "$settingsTag top_surface_layer_index=$layer" $x $y $z $feed $accel $printedHeight $extraRetract 2)) { $out.Add($cmd) }
             $wipeCount++
             $topSurfaceWipeCount++
+            $pendingTopSurfaceLayer = $null
         }
     }
 
@@ -503,6 +576,7 @@ for ($lineIndex = 0; $lineIndex -lt $lines.Count; $lineIndex++) {
 
 if ($conditionalDepth -ne 0) { throw 'Unclosed conditional G-code block during printing.' }
 if ($skippableDepth -ne 0) { throw 'Unclosed skippable G-code block during printing.' }
+if ($null -ne $pendingTopSurfaceLayer) { throw 'No printable top-surface extrusion followed its feature marker.' }
 if ($null -ne $pendingBoundaryIndex) { throw 'Unplaced layer-boundary wipe remains at the end of G-code.' }
 if ($resumeAtTravel -or $deferredPrime -gt 0.0005) { throw 'Layer transition did not complete after wipe.' }
 if ($wipeCount -eq 0) {

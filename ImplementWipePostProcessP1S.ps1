@@ -30,7 +30,7 @@ function Require-Header([string] $key, [string] $value) {
     if ($actual -ne $value) { throw "Unsupported G-code setting: $key = $actual (expected $value)." }
 }
 
-Require-Header 'printer_model' 'Bambu Lab P2S'
+Require-Header 'printer_model' 'Bambu Lab P1S'
 $printableArea = Get-Header 'printable_area'
 $areaPoints = $printableArea -split '\s*,\s*'
 if ($areaPoints.Count -lt 4) { throw 'Unsupported printable area: expected a 256 x 256 mm build plate.' }
@@ -75,7 +75,7 @@ if ([double]::IsNaN($targetRetract) -or [double]::IsInfinity($targetRetract) -or
     throw 'Wipe retraction target must be between 0 and 2 mm.'
 }
 $retractTag = Format-Number $targetRetract
-$settingsTag = "routine_rev=9 layer_interval=$LayerInterval early_layers=$EarlyWipeAfterLayers retract_mm=$retractTag"
+$settingsTag = "printer=P1S routine_rev=1 layer_interval=$LayerInterval early_layers=$EarlyWipeAfterLayers retract_mm=$retractTag"
 if ($gcode -match '(?m)^; (?!NOZZLE_WIPE_)[A-Z][A-Z0-9_]*_WIPE_(?:BEGIN|END|RESUME|PRIME)\b') {
     throw 'Obsolete nozzle wipe markers found in G-code. Slice the original model again.'
 }
@@ -113,10 +113,19 @@ function New-WipeBlock([string] $label, [double] $x, [double] $y, [double] $z, [
     $block.Add('M400'); $block.Add('G90'); $block.Add('M83')
     if ($extraRetract -gt 0.0005) { $block.Add("G1 E-$(Format-Number $extraRetract) F1800") }
     $block.Add("G1 Z$safeZ F1200")
-    $block.Add('M400'); $block.Add('G150.3')
+    # The stock P1S wipe path is outside the printable area at the rear of the printer.
+    # Follow the approach and exit used by Bambu Studio's P1S filament-change routine.
+    $block.Add('M400')
+    $block.Add('M204 S9000')
+    $block.Add('G1 X70 F15000')
+    $block.Add('G1 Y245 F15000')
+    $block.Add('G1 Y265 F3000')
     for ($i = 0; $i -lt $repeats; $i++) {
-        $block.Add('G150.1 F8000')
+        $block.Add('G1 X100 F5000')
+        if ($i -lt ($repeats - 1)) { $block.Add('G1 X70 F10000') }
     }
+    $block.Add('G1 X165 F15000')
+    $block.Add('G1 Y256 F15000')
     $block.Add('M400')
     $block.Add('G90'); $block.Add('M83')
     $block.Add("G1 Z$safeZ F1200")

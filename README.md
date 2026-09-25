@@ -1,7 +1,7 @@
 # Automatic nozzle wiping for Bambu Studio
 
 > [!IMPORTANT]
-> The script currently supports only **Bambu Lab P2S** printers.
+> This page describes the **Bambu Lab P2S** script. For a P1S with its stock rear nozzle wiper, use [README-P1S.md](README-P1S.md). For an A1 with its stock side purge wiper, use [README-A1.md](README-A1.md). Each printer has a separate script.
 >
 > **Windows only:** the current setup uses Windows PowerShell and is not supported on macOS or Linux.
 
