@@ -13,7 +13,7 @@ Your support will help me improve and maintain the existing script, test it more
 
 ## What the script does
 
-`ImplementWipePostProcess.ps1` is a post-processing script for Bambu Studio. It adds automatic nozzle-wiping cycles to sliced G-code:
+`ImplementWipePostProcessP2s.ps1` is a post-processing script for Bambu Studio. It adds automatic nozzle-wiping cycles to sliced G-code:
 
 - after the first layer;
 - after every configured number of completed layers;
@@ -45,13 +45,13 @@ If validation fails, the script reports an error instead of modifying the G-code
 
 ## Setup
 
-1. Save `ImplementWipePostProcess.ps1` in a permanent location on your computer.
+1. Save `ImplementWipePostProcessP2s.ps1` in a permanent location on your computer.
 2. In Bambu Studio, open **Process → Others → Post-processing scripts**. Enable advanced settings if needed.
 3. Save a copy of your Process profile under a separate name, for example `Nozzle wipe every 20 layers`.
 4. Add the following as a single physical line in the **Post-processing scripts** field, replacing `D:\YOUR_PATH_HERE\` with the actual folder containing the script:
 
    ```text
-   C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcess.ps1" -LayerInterval 20
+   C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcessP2s.ps1" -LayerInterval 20
    ```
 
    Bambu Studio automatically appends the path to the sliced G-code as the last argument.
@@ -75,25 +75,25 @@ Each example below is one complete line for the **Post-processing scripts** fiel
 Wipe after the first layer and then every 20 layers:
 
 ```text
-C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcess.ps1"
+C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcessP2s.ps1"
 ```
 
 Wipe after the first layer and then every 15 layers:
 
 ```text
-C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcess.ps1" -LayerInterval 15
+C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcessP2s.ps1" -LayerInterval 15
 ```
 
 Wipe after the first layer, add an early cycle after layer 15, and then wipe after layers 30, 60, and so on:
 
 ```text
-C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcess.ps1" -LayerInterval 30 -EarlyWipeAfterLayers 15
+C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcessP2s.ps1" -LayerInterval 30 -EarlyWipeAfterLayers 15
 ```
 
 Use a target retraction of 0.6 mm when the script has to add retraction:
 
 ```text
-C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcess.ps1" -LayerInterval 15 -WipeRetractMm 0.6
+C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcessP2s.ps1" -LayerInterval 15 -WipeRetractMm 0.6
 ```
 
 ## When wiping runs
