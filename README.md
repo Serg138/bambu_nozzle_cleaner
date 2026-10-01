@@ -1,7 +1,7 @@
 # Automatic nozzle wiping for Bambu Studio
 
 > [!IMPORTANT]
-> This page describes the **Bambu Lab P2S** script. For a P1S with its stock rear nozzle wiper, use [README-P1S.md](README-P1S.md). For an A1 with its stock side purge wiper, use [README-A1.md](README-A1.md). Each printer has a separate script.
+> This is the main guide for all three scripts: **Bambu Lab P2S, P1S, and A1**. Shared options and wiping rules are documented here. Printer-specific wiper details and copyable commands are in [README-P1S.md](README-P1S.md) and [README-A1.md](README-A1.md). Each printer has a separate script.
 >
 > **Windows only:** the current setup uses Windows PowerShell and is not supported on macOS or Linux.
 
@@ -13,13 +13,21 @@ Your support will help me improve and maintain the existing script, test it more
 
 ## What the script does
 
-`ImplementWipePostProcessP2s.ps1` is a post-processing script for Bambu Studio. It adds automatic nozzle-wiping cycles to sliced G-code:
+These post-processing scripts for Bambu Studio add automatic nozzle-wiping cycles to sliced G-code:
 
-- after the first layer;
+- after the first completed layer, if another layer follows;
 - after every configured number of completed layers;
-- before the first `Top surface` section on a layer.
+- after an optional early layer;
+- before the topmost surface by default;
+- optionally before the first `Top surface` section on every layer containing one.
 
-The script works with a 256 x 256 mm printable area whose origin is X0 Y0. It supports any nozzle diameter and filament type, but currently processes only single-filament, layer-by-layer prints whose movements and retraction state can be reconstructed safely.
+| Printer | Script | Wiper |
+| --- | --- | --- |
+| P2S | `ImplementWipePostProcessP2s.ps1` | Firmware-controlled wiping station |
+| P1S | `ImplementWipePostProcessP1S.ps1` | Stock rear nozzle wiper; see [P1S details](README-P1S.md) |
+| A1 | `ImplementWipePostProcessA1.ps1` | Stock side purge wiper; see [A1 details](README-A1.md) |
+
+All three scripts use the same options and scheduling rules. They work with a 256 x 256 mm printable area whose origin is X0 Y0 and support any nozzle diameter and filament type, but currently process only single-filament, layer-by-layer prints whose movements and retraction state can be reconstructed safely.
 
 Before making any changes, the script checks the sliced G-code. If the print is unsupported or a safe wiping cycle cannot be confirmed, processing stops with an error.
 
@@ -31,7 +39,7 @@ Before making any changes, the script checks the sliced G-code. If the print is 
 The script currently requires:
 
 - Windows with Windows PowerShell;
-- a Bambu Lab P2S printer;
+- a Bambu Lab P2S, P1S, or A1 with the matching script and supported wiper;
 - a 256 x 256 mm printable area starting at X0 Y0;
 - layer-by-layer printing;
 - spiral vase mode disabled;
@@ -39,13 +47,13 @@ The script currently requires:
 - a single-filament print without tool changes;
 - G-code movements and retraction that the script can reconstruct safely.
 
-The script validates return coordinates, clearance above the printed layer, printable height, coordinate and extrusion modes, and previously inserted wiping blocks. Running it repeatedly with the same settings does not duplicate wiping cycles.
+Each script checks `printer_model` and validates return coordinates, clearance above the printed layer, printable height, coordinate and extrusion modes, and previously inserted wiping blocks. Running it repeatedly with the same settings does not duplicate wiping cycles.
 
 If validation fails, the script reports an error instead of modifying the G-code.
 
 ## Setup
 
-1. Save `ImplementWipePostProcessP2s.ps1` in a permanent location on your computer.
+1. Save the script for your printer in a permanent location on your computer. The example below uses P2S; use the matching commands for [P1S](README-P1S.md#command-examples) or [A1](README-A1.md#command-examples).
 2. In Bambu Studio, open **Process → Others → Post-processing scripts**. Enable advanced settings if needed.
 3. Save a copy of your Process profile under a separate name, for example `Nozzle wipe every 20 layers`.
 4. Add the following as a single physical line in the **Post-processing scripts** field, replacing `D:\YOUR_PATH_HERE\` with the actual folder containing the script:
@@ -58,7 +66,7 @@ If validation fails, the script reports an error instead of modifying the G-code
 
 5. Save the profile. When opening another 3MF project, make sure this Process profile is selected before clicking **Slice plate** and **Print plate**.
 
-If you change the script parameters or update from an older version, slice the original project again before printing.
+If you change the script parameters (including either top-surface flag) or update from an older version, slice the original project again before printing. The scripts reject previously processed G-code with different settings.
 
 ## Options
 
@@ -67,12 +75,23 @@ If you change the script parameters or update from an older version, slice the o
 | `-LayerInterval` | Runs a wiping cycle after every N completed layers. Must be a positive integer. | `20` |
 | `-EarlyWipeAfterLayers` | Adds one extra early wiping cycle after the specified layer. Use `0` to disable it. | `0` |
 | `-WipeRetractMm` | Overrides the target retraction used during wiping. Accepted range: 0–2 mm. | Value from the sliced profile |
+| `-WipeBeforeTop` | `1` enables wiping before the first `Top surface` section on every applicable layer; `0` disables this trigger. Includes the topmost surface. | `0` (off) |
+| `-WipeBeforeTopmost` | `1` enables wiping before the first `Top surface` section on the last layer containing one; `0` disables this trigger. | `1` (on) |
+
+Both top-surface flags accept `0` or `1`, so they can be passed directly through Windows PowerShell's `-File` command line in Bambu Studio. They are independent: disabling one does not disable the other.
+
+| `-WipeBeforeTop` | `-WipeBeforeTopmost` | Top-surface wiping |
+| --- | --- | --- |
+| `0` | `1` | Only the topmost surface (default). |
+| `1` | `0` | Every layer containing `Top surface`, including the topmost. |
+| `1` | `1` | Every layer containing `Top surface`, with one cycle on the topmost layer. |
+| `0` | `0` | No cycles triggered by top surfaces. First-layer, interval, and early-layer cycles still run. |
 
 ## Command examples
 
-Each example below is one complete line for the **Post-processing scripts** field. Bambu Studio appends the G-code path automatically.
+Each example below is one complete P2S line for the **Post-processing scripts** field. Bambu Studio appends the G-code path automatically. Unless overridden, all examples also enable topmost wiping.
 
-Wipe after the first layer and then every 20 layers:
+Default: wipe after the first layer, every 20 layers, and before the topmost surface:
 
 ```text
 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcessP2s.ps1"
@@ -96,18 +115,39 @@ Use a target retraction of 0.6 mm when the script has to add retraction:
 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcessP2s.ps1" -LayerInterval 15 -WipeRetractMm 0.6
 ```
 
+Enable wiping before every top-surface layer, with both triggers enabled:
+
+```text
+C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcessP2s.ps1" -WipeBeforeTop 1 -WipeBeforeTopmost 1
+```
+
+Enable only the every-top trigger (which also covers the topmost surface):
+
+```text
+C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcessP2s.ps1" -WipeBeforeTop 1 -WipeBeforeTopmost 0
+```
+
+Disable both top-surface triggers, keeping the first-layer and periodic cycles:
+
+```text
+C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcessP2s.ps1" -WipeBeforeTop 0 -WipeBeforeTopmost 0
+```
+
 ## When wiping runs
 
 - **After the first layer:** one cycle with three wiping passes, provided the model has another layer.
 - **After every N completed layers:** one cycle with two wiping passes. Set N with `-LayerInterval`.
 - **After the layer selected by `-EarlyWipeAfterLayers`:** one additional cycle with two wiping passes.
-- **Before the first `Top surface` section on each applicable layer:** one cycle with two wiping passes.
+- **Before the topmost surface (`-WipeBeforeTopmost 1`, default):** one cycle with two wiping passes before the first `Top surface` section on the last layer containing that feature.
+- **Before each top-surface layer (`-WipeBeforeTop 1`, optional):** one cycle with two wiping passes before the first `Top surface` section on each applicable layer.
+
+**Topmost** means the last layer in the entire print containing Bambu Studio's `; FEATURE: Top surface` marker, even if later layers contain other features. It is not calculated separately for each object or island. If there are no `Top surface` markers, neither top-surface trigger adds a cycle.
 
 There is no wiping during the first layer, even if it contains a `Top surface` section.
 
-Only one wiping cycle is inserted at a given point. If a layer already receives a cycle because of the interval or the early-layer setting, a duplicate cycle is not added before `Top surface`. If the first-layer cycle also matches the configured interval, it remains a single cycle with three passes.
+Only one wiping cycle is inserted per layer, even when both top-surface flags are enabled or a layer contains multiple top-surface islands. If a layer already receives a cycle at its start because of the first-layer, interval, or early-layer setting, another cycle is not added before `Top surface`. If the first-layer cycle also matches the configured interval, it remains a single cycle with three passes.
 
-During a cycle, the nozzle is lifted by 3 mm, moved to the wiping station, wiped, and returned to the print. At a layer transition, it returns directly to the start of the next layer.
+During a cycle, the nozzle is lifted by 3 mm, moved to the wiping station, wiped, and returned to the print. At a layer transition, it returns directly to the start of the next layer. At a top surface, it returns to the interrupted position. Retraction and feed/acceleration state are restored before printing continues. On A1, the top-surface cycle is placed immediately before its first extrusion, after the slicer restores the motion settings needed for a safe return.
 
 ## Retraction
 
@@ -119,8 +159,18 @@ Between layers, the script reuses the slicer's existing retraction whenever poss
 
 ## Safety
 
-The script inserts `G150.3` and `G150.1 F8000` firmware commands directly into the G-code. The printer firmware controls the internal movements of these commands, and those movements are not visible in the Bambu Studio preview.
+The **P2S** script inserts `G150.3` and `G150.1 F8000` firmware commands directly into the G-code. The printer firmware controls the internal movements of these commands, and those movements are not visible in the Bambu Studio preview. P1S and A1 use fixed stock-wiper paths described in their printer-specific guides.
 
 G-code validation cannot guarantee that the toolhead will avoid every model, build plate configuration, or unexpected obstacle. Carefully watch the complete wiping cycle during the first print with a new setup: lift, travel to the wiping station, wiping, return, and descent.
 
 Stop the print immediately if the toolhead hits the model or frame, contacts the build plate unexpectedly, or misses the wiper.
+
+## Development checks
+
+From the repository folder, run the regression checks in Windows PowerShell:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-TopSurfaceWipes.ps1
+```
+
+The tests use temporary synthetic G-code for all three printers. They cover flag combinations, topmost detection, overlapping triggers, repeated processing, invalid settings, and A1's deferred top-surface wipe.

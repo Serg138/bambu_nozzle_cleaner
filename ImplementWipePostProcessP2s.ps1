@@ -4,7 +4,11 @@ param(
     [Alias('Interval')]
     [int] $LayerInterval = 20,
     [int] $EarlyWipeAfterLayers = 0,
-    [string] $WipeRetractMm = ''
+    [string] $WipeRetractMm = '',
+    [ValidateSet(0, 1)]
+    [int] $WipeBeforeTop = 0,
+    [ValidateSet(0, 1)]
+    [int] $WipeBeforeTopmost = 1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,7 +79,7 @@ if ([double]::IsNaN($targetRetract) -or [double]::IsInfinity($targetRetract) -or
     throw 'Wipe retraction target must be between 0 and 2 mm.'
 }
 $retractTag = Format-Number $targetRetract
-$settingsTag = "routine_rev=9 layer_interval=$LayerInterval early_layers=$EarlyWipeAfterLayers retract_mm=$retractTag"
+$settingsTag = "routine_rev=10 layer_interval=$LayerInterval early_layers=$EarlyWipeAfterLayers retract_mm=$retractTag wipe_before_top=$WipeBeforeTop wipe_before_topmost=$WipeBeforeTopmost"
 if ($gcode -match '(?m)^; (?!NOZZLE_WIPE_)[A-Z][A-Z0-9_]*_WIPE_(?:BEGIN|END|RESUME|PRIME)\b') {
     throw 'Obsolete nozzle wipe markers found in G-code. Slice the original model again.'
 }
@@ -156,15 +160,15 @@ if ($beginCount -gt 0) {
         $isBoundary = $kind -eq 'layer_index'
         $originalZ = if ($isBoundary) { $returnZ - 3.0 } else { $returnZ }
         $expected = @(New-WipeBlock "$settingsTag $kind=$layerIndex" $returnX $returnY $originalZ $oldFeed $oldAccel $printed $extra $repeats $isBoundary) -join "`n"
-        if (($block.Value -replace "`r`n", "`n") -cne $expected) {
+        if (($block.Value.TrimEnd("`r") -replace "`r`n", "`n") -cne $expected) {
             throw 'Incomplete or modified nozzle wipe movements found in G-code.'
         }
         if (-not $isBoundary) { continue }
         $boundaryCount++
         $following = $gcode.Substring($block.Index + $block.Length)
-        $nextLayer = [regex]::Match($following, '(?m)^; CHANGE_LAYER\r?$')
-        if (-not $nextLayer.Success) { throw 'Missing next layer after nozzle wipe.' }
-        $following = $following.Substring(0, $nextLayer.Index)
+        $nextBoundary = [regex]::Match($following, '(?m)^; (?:CHANGE_LAYER|MACHINE_END_GCODE_START)\r?$')
+        if (-not $nextBoundary.Success) { throw 'Missing layer or machine-end boundary after nozzle wipe.' }
+        $following = $following.Substring(0, $nextBoundary.Index)
         $resume = [regex]::Matches($following, '(?m)^; NOZZLE_WIPE_RESUME layer_index=(\d+) travel_Z=([\d.]+) travel_feed=([\d.]+)\r?$')
         if ($resume.Count -ne 1 -or [int]$resume[0].Groups[1].Value -ne $layerIndex) {
             throw 'Missing or duplicated next-layer resume after nozzle wipe.'
@@ -207,6 +211,18 @@ if ($beginCount -gt 0) {
 
 $newline = if ($gcode.Contains("`r`n")) { "`r`n" } else { "`n" }
 $lines = $gcode -split "`r?`n"
+# Topmost means the last layer containing Top surface, across the whole print.
+# Scan only feature/layer markers and ignore machine end G-code.
+$topmostLayer = -1
+if ($WipeBeforeTopmost -eq 1) {
+    $scanLayer = -1
+    foreach ($marker in [regex]::Matches($gcode, '(?m)^; (CHANGE_LAYER|FEATURE:[ \t]*Top surface|MACHINE_END_GCODE_START)[ \t]*\r?$')) {
+        $markerType = $marker.Groups[1].Value
+        if ($markerType -eq 'MACHINE_END_GCODE_START') { break }
+        if ($markerType -eq 'CHANGE_LAYER') { $scanLayer++ }
+        elseif ($scanLayer -ge 0) { $topmostLayer = $scanLayer }
+    }
+}
 function Find-LayerWipeInsertIndex([string[]] $sourceLines, [int] $markerIndex) {
     $wipeStarted = $false
     for ($j = $markerIndex + 1; $j -lt $sourceLines.Count; $j++) {
@@ -352,11 +368,13 @@ for ($lineIndex = 0; $lineIndex -lt $lines.Count; $lineIndex++) {
         }
     }
 
-    if (-not $endGcode -and $layer -gt 0 -and $line -match '^; FEATURE:\s*Top surface\s*$' -and -not $topSurfaceSeen) {
+    if (-not $endGcode -and $layer -gt 0 -and
+        ($WipeBeforeTop -eq 1 -or ($WipeBeforeTopmost -eq 1 -and $layer -eq $topmostLayer)) -and
+        $line -match '^; FEATURE:\s*Top surface\s*$' -and -not $topSurfaceSeen) {
         if ($insideWipeTower -or $conditionalDepth -ne 0 -or $skippableDepth -ne 0) {
             throw 'Top surface begins inside a wipe tower or optional G-code block.'
         }
-        # A layer may contain multiple separate top-surface islands.
+        # Both flags share one trigger, including multiple islands on the same layer.
         $topSurfaceSeen = $true
         if (-not $boundaryWiped) {
             if (-not $absoluteXYZ -or -not $relativeE -or -not $millimeters -or $null -eq $x -or $null -eq $y -or $null -eq $z -or $null -eq $feed -or $null -eq $accel -or $null -eq $printedHeight -or $null -eq $retractedAmount) {
