@@ -12,8 +12,10 @@ function Assert-Equal($actual, $expected, [string] $message) {
     $script:checks++
 }
 
-function New-TestGcode([string] $printer, [int[]] $topLayers = @(0, 1, 2, 4), [int] $layerCount = 6, [switch] $a1Optional) {
+function New-TestGcode([string] $printer, [int[]] $topLayers = @(0, 1, 2, 4), [int] $layerCount = 6,
+                      [switch] $a1Optional, [double] $firstLayerHeight = 0.2, [double] $layerHeight = 0.2) {
     $lines = [Collections.Generic.List[string]]::new()
+    $firstHeight = $firstLayerHeight.ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
     foreach ($line in @(
         "; printer_model = Bambu Lab $printer",
         '; printable_area = 0x0,256x0,256x256,0x256',
@@ -23,11 +25,11 @@ function New-TestGcode([string] $printer, [int[]] $topLayers = @(0, 1, 2, 4), [i
         '; use_firmware_retraction = 0',
         '; filament_retraction_length = 0.4',
         "; total layer number: $layerCount",
-        'G21', 'G90', 'M83', 'M204 S1000', 'G1 X100 Y100 Z0.2 F1200'
+        'G21', 'G90', 'M83', 'M204 S1000', "G1 X100 Y100 Z$firstHeight F1200"
     )) { $lines.Add($line) }
     for ($layerIndex = 0; $layerIndex -lt $layerCount; $layerIndex++) {
-        $height = (0.2 * ($layerIndex + 1)).ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
-        $travel = (0.2 * ($layerIndex + 1) + 0.4).ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
+        $height = ($firstLayerHeight + $layerHeight * $layerIndex).ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
+        $travel = ($firstLayerHeight + $layerHeight * $layerIndex + 0.4).ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
         $lines.Add('; CHANGE_LAYER')
         if ($layerIndex -gt 0) {
             $lines.Add('; WIPE_START')
@@ -127,6 +129,15 @@ function Test-Case([string] $scriptPath, [string] $name, [string] $source, [stri
     $path
 }
 
+function Test-RejectedHeight([string] $scriptPath, [string] $name, [string] $source) {
+    $path = Join-Path $testDirectory ($name + '.gcode')
+    [IO.File]::WriteAllText($path, $source)
+    $hashBefore = (Get-FileHash -LiteralPath $path).Hash
+    Invoke-Processor $scriptPath $path @() 'Unsafe return position'
+    Assert-Equal (Get-FileHash -LiteralPath $path).Hash $hashBefore "$name rejected height preserves file"
+    Write-Host "PASS $name"
+}
+
 try {
     foreach ($printer in @('A1', 'P1S', 'P2S')) {
         $scriptPath = Join-Path $repoRoot "ImplementWipePostProcess$printer.ps1"
@@ -147,6 +158,26 @@ try {
         $null = Test-Case $scriptPath "$printer-first-layer-top" (New-TestGcode $printer @(0)) $both @()
         $null = Test-Case $scriptPath "$printer-single-layer" (New-TestGcode $printer @(0) 1) $both @() @()
         $null = Test-Case $scriptPath "$printer-last-layer-top" (New-TestGcode $printer @(2, 5)) @() @(5)
+
+        # Thin first layers must not be rejected by an arbitrary minimum Z.
+        foreach ($heightMm in @(0.08, 0.10, 0.12, 0.14, 0.15, 0.16, 0.24, 0.28)) {
+            $heightTag = $heightMm.ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
+            $heightSource = New-TestGcode $printer -firstLayerHeight $heightMm -layerHeight $heightMm
+            $heightPath = Test-Case $scriptPath "$printer-height-$heightTag" $heightSource @() @(4)
+            $heightProcessed = [IO.File]::ReadAllText($heightPath)
+            $firstWipe = [regex]::Match($heightProcessed, '(?m)^; NOZZLE_WIPE_BEGIN[^\r\n]* layer_index=1 [^\r\n]*return_Z=([\d.]+)[^\r\n]*printed_height=([\d.]+)')
+            $expectedReturnZ = ($heightMm + 3.0).ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
+            Assert-Equal $firstWipe.Groups[1].Value $expectedReturnZ "$printer height $heightTag first-wipe lift"
+            Assert-Equal $firstWipe.Groups[2].Value $heightTag "$printer height $heightTag printed height"
+        }
+        $null = Test-Case $scriptPath "$printer-mixed-heights" (New-TestGcode $printer -firstLayerHeight 0.12 -layerHeight 0.08) @() @(4)
+        $null = Test-Case $scriptPath "$printer-thin-topmost" (New-TestGcode $printer @(2) 3 -firstLayerHeight 0.04 -layerHeight 0.04) @() @(2)
+        # Removing the fixed minimum must still reject invalid or out-of-range Z.
+        Test-RejectedHeight $scriptPath "$printer-zero-height" (New-TestGcode $printer -firstLayerHeight 0)
+        Test-RejectedHeight $scriptPath "$printer-negative-height" (New-TestGcode $printer -firstLayerHeight -0.08)
+        Test-RejectedHeight $scriptPath "$printer-zero-Z" ((New-TestGcode $printer -firstLayerHeight 0.12) -replace '(?m)^G1 Z0\.12 F1200$', 'G1 Z0 F1200')
+        Test-RejectedHeight $scriptPath "$printer-below-printed-height" ((New-TestGcode $printer -firstLayerHeight 0.12) -replace '(?m)^G1 Z0\.12 F1200$', 'G1 Z0.1 F1200')
+        Test-RejectedHeight $scriptPath "$printer-excessive-height" (New-TestGcode $printer -firstLayerHeight 253)
 
         $hashBefore = (Get-FileHash -LiteralPath $defaultPath).Hash
         foreach ($changed in @(@('-WipeBeforeTop', '1'), @('-WipeBeforeTopmost', '0'))) {

@@ -93,14 +93,15 @@ if ($beginCount -eq 0 -and $gcode -match '(?m)^; NOZZLE_WIPE_(?:RESUME|PRIME)\b'
 }
 
 function New-WipeBlock([string] $label, [double] $x, [double] $y, [double] $z, [double] $feed, [double] $accel, [double] $printedHeight, [double] $extraRetract, [int] $repeats, [bool] $layerTransition = $false) {
+    # Validate actual positive Z heights without imposing a minimum layer thickness.
     if ([double]::IsNaN($x) -or [double]::IsInfinity($x) -or
         [double]::IsNaN($y) -or [double]::IsInfinity($y) -or
         [double]::IsNaN($z) -or [double]::IsInfinity($z) -or
         [double]::IsNaN($feed) -or [double]::IsInfinity($feed) -or
         [double]::IsNaN($accel) -or [double]::IsInfinity($accel) -or
         [double]::IsNaN($printedHeight) -or [double]::IsInfinity($printedHeight) -or
-        $z -gt $maxWipeStartZ -or $z -lt 0.15 -or $x -lt 0 -or $x -gt 256 -or $y -lt 0 -or $y -gt 256 -or
-        $printedHeight -lt 0.15 -or $printedHeight -gt $maxWipeStartZ -or
+        $z -gt $maxWipeStartZ -or $z -le 0 -or $x -lt 0 -or $x -gt 256 -or $y -lt 0 -or $y -gt 256 -or
+        $printedHeight -le 0 -or $printedHeight -gt $maxWipeStartZ -or
         $z -lt ($printedHeight - 0.01) -or $z -gt ($printedHeight + 5.0) -or
         $feed -le 0 -or $accel -le 0 -or
         [double]::IsNaN($extraRetract) -or $extraRetract -lt 0 -or $extraRetract -gt 2 -or
