@@ -72,8 +72,8 @@ If you change the script parameters (including either top-surface flag) or updat
 
 | Option | Description | Default |
 | --- | --- | --- |
-| `-LayerInterval` | Runs a wiping cycle after every N completed layers. Must be a positive integer. | `20` |
-| `-EarlyWipeAfterLayers` | Adds one extra early wiping cycle after the specified layer. Use `0` to disable it. | `0` |
+| `-LayerInterval` | Runs after completed layers N, 2N, 3N, etc., before layers N+1, 2N+1, 3N+1. Must be a positive integer. See [layer numbering examples](#layer-numbering-and-intervals). | `20` |
+| `-EarlyWipeAfterLayers` | Adds one extra cycle after the specified completed layer, before the next layer. Use `0` to disable it. | `0` |
 | `-WipeRetractMm` | Overrides the target retraction used during wiping. Accepted range: 0–2 mm. | Value from the sliced profile |
 | `-WipeBeforeTop` | `1` enables wiping before the first `Top surface` section on every applicable layer; `0` disables this trigger. Includes the topmost surface. | `0` (off) |
 | `-WipeBeforeTopmost` | `1` enables wiping before the first `Top surface` section on the last layer containing one; `0` disables this trigger. | `1` (on) |
@@ -148,6 +148,19 @@ There is no wiping during the first layer, even if it contains a `Top surface` s
 Only one wiping cycle is inserted per layer, even when both top-surface flags are enabled or a layer contains multiple top-surface islands. If a layer already receives a cycle at its start because of the first-layer, interval, or early-layer setting, another cycle is not added before `Top surface`. If the first-layer cycle also matches the configured interval, it remains a single cycle with three passes.
 
 During a cycle, the nozzle is lifted by 3 mm, moved to the wiping station, wiped, and returned to the print. At a layer transition, it returns directly to the start of the next layer. At a top surface, it returns to the interrupted position. Retraction and feed/acceleration state are restored before printing continues. On A1, the top-surface cycle is placed immediately before its first extrusion, after the slicer restores the motion settings needed for a safe return.
+
+### Layer numbering and intervals
+
+The examples below number the first printed layer as **1**. `-LayerInterval N` schedules wiping **after N completed layers**, immediately before printing layer N+1. It repeats after layers 2N, 3N, and so on, provided another layer follows.
+
+| Setting | Wipe after completed layers | Wipe before printing layers |
+| --- | --- | --- |
+| `-LayerInterval 100` | 100, 200, 300, ... | 101, 201, 301, ... |
+| `-LayerInterval 99` | 99, 198, 297, ... | 100, 199, 298, ... |
+
+Setting the interval to `99` places the first periodic wipe before layer 100, but the following periodic wipes occur before layers 199 and 298. It does **not** produce a schedule before layers 100, 200, 300, etc. The current script has no separate offset option for that schedule.
+
+The automatic wipe after the first layer and any extra early wipe do not restart the interval count. For example, `-EarlyWipeAfterLayers 99` adds one extra cycle before layer 100 while keeping the periodic schedule set by `-LayerInterval`.
 
 ## Retraction
 

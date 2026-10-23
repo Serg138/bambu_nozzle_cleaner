@@ -15,6 +15,8 @@ Modified start or machine G-code that changes the stock coordinate system or wip
 
 Use these lines with the [shared setup instructions](README.md#setup); replace `D:\YOUR_PATH_HERE\` with your script folder. See [Options](README.md#options) for flag combinations and defaults.
 
+An interval of `100` wipes after layers 100, 200, etc., before layers 101, 201, etc. See [layer numbering and intervals](README.md#layer-numbering-and-intervals) for examples, including interval `99`.
+
 Default settings:
 
 ```text
