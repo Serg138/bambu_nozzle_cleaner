@@ -177,7 +177,7 @@ if ($beginCount -gt 0) {
         $travelZ = Parse-Number $resume[0].Groups[2].Value
         $travelFeed = Parse-Number $resume[0].Groups[3].Value
         $resumeText = $following.Substring($resume[0].Index) -split "`r?`n"
-        if ($travelZ -lt ($printed + 0.1) -or $travelZ -gt $maxZ -or $travelFeed -le 0 -or
+        if ($travelZ -le $printed -or $travelZ -gt $maxZ -or $travelFeed -le 0 -or
             $resumeText.Count -lt 3 -or
             $resumeText[1] -cne "G1 Z$(Format-Number $travelZ) F1200" -or
             $resumeText[2] -cne "G1 F$(Format-Number $travelFeed)") {
@@ -270,7 +270,7 @@ function Find-NextLayerTarget([string[]] $sourceLines, [int] $insertIndex, [doub
             $targetY = Parse-Number $Matches[2]
             $targetZ = Parse-Number $Matches[3]
             if ($targetX -lt 0 -or $targetX -gt 256 -or $targetY -lt 0 -or $targetY -gt 256 -or
-                $targetZ -lt ($lastPrintedHeight + 0.1) -or $targetZ -gt $maxZ) {
+                $targetZ -le $lastPrintedHeight -or $targetZ -gt $maxZ) {
                 throw "Unsafe next-layer travel target at line $($j + 1)."
             }
             return [pscustomobject]@{ X = $targetX; Y = $targetY }
@@ -397,7 +397,8 @@ for ($lineIndex = 0; $lineIndex -lt $lines.Count; $lineIndex++) {
         $zMove = [regex]::Match($code, '(?<![A-Za-z])Z([-+]?(?:\d+(?:\.\d*)?|\.\d+))(?:\s|$)')
         if ($code -match '^G(?:0|1|2|3)(?:\s|$)' -and $zMove.Success) {
             $travelZ = Parse-Number $zMove.Groups[1].Value
-            if ($travelZ -lt ($resumePrintedHeight + 0.1) -or $travelZ -gt $maxZ) {
+            # XY return already happened at the 3 mm lift; allow thin layers without Z-hop.
+            if ($travelZ -le $resumePrintedHeight -or $travelZ -gt $maxZ) {
                 throw "Unsafe travel height after layer wipe at line $($lineIndex + 1)."
             }
             if ($code -match '^G3\s+Z([-+.\d]+)\s+I([-+.\d]+)\s+J([-+.\d]+)\s+P1\s+F([-+.\d]+)\s*$') {

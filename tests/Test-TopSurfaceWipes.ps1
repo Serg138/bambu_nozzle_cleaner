@@ -13,7 +13,8 @@ function Assert-Equal($actual, $expected, [string] $message) {
 }
 
 function New-TestGcode([string] $printer, [int[]] $topLayers = @(0, 1, 2, 4), [int] $layerCount = 6,
-                      [switch] $a1Optional, [double] $firstLayerHeight = 0.2, [double] $layerHeight = 0.2) {
+                      [switch] $a1Optional, [double] $firstLayerHeight = 0.2, [double] $layerHeight = 0.2,
+                      [double] $travelLift = 0.4) {
     $lines = [Collections.Generic.List[string]]::new()
     $firstHeight = $firstLayerHeight.ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
     foreach ($line in @(
@@ -29,7 +30,7 @@ function New-TestGcode([string] $printer, [int[]] $topLayers = @(0, 1, 2, 4), [i
     )) { $lines.Add($line) }
     for ($layerIndex = 0; $layerIndex -lt $layerCount; $layerIndex++) {
         $height = ($firstLayerHeight + $layerHeight * $layerIndex).ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
-        $travel = ($firstLayerHeight + $layerHeight * $layerIndex + 0.4).ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
+        $travel = ($firstLayerHeight + $layerHeight * $layerIndex + $travelLift).ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
         $lines.Add('; CHANGE_LAYER')
         if ($layerIndex -gt 0) {
             $lines.Add('; WIPE_START')
@@ -172,6 +173,43 @@ try {
         }
         $null = Test-Case $scriptPath "$printer-mixed-heights" (New-TestGcode $printer -firstLayerHeight 0.12 -layerHeight 0.08) @() @(4)
         $null = Test-Case $scriptPath "$printer-thin-topmost" (New-TestGcode $printer @(2) 3 -firstLayerHeight 0.04 -layerHeight 0.04) @() @(2)
+
+        # Without Z-hop the next travel is only one layer above the completed print.
+        # Match the user's Studio options and test both insertion and upload validation.
+        $noHopOptions = @('-EarlyWipeAfterLayers', '5', '-LayerInterval', '100', '-WipeBeforeTop', '0', '-WipeBeforeTopmost', '0')
+        foreach ($heightMm in @(0.04, 0.08, 0.10)) {
+            $heightTag = $heightMm.ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
+            $noHopSource = New-TestGcode $printer -layerHeight $heightMm -travelLift 0
+            $noHopPath = Test-Case $scriptPath "$printer-no-hop-$heightTag" $noHopSource $noHopOptions @() @(1, 5)
+            $noHopProcessed = [IO.File]::ReadAllText($noHopPath)
+            $nextZ = (0.2 + $heightMm).ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
+            Assert-Equal ($noHopProcessed.Contains("G1 Z3.2 F1200`nG1 X100 Y100 F15000")) $true "$printer no-hop $heightTag raised XY return"
+            Assert-Equal ($noHopProcessed.Contains("; NOZZLE_WIPE_RESUME layer_index=1 travel_Z=$nextZ travel_feed=12000`nG1 Z$nextZ F1200")) $true "$printer no-hop $heightTag next-layer descent"
+        }
+        # Real adaptive-height G-code rounds motion coordinates to three decimals.
+        $null = Test-Case $scriptPath "$printer-no-hop-rounded" (New-TestGcode $printer -firstLayerHeight 56.9184 -layerHeight 0.079998 -travelLift 0) $noHopOptions @() @(1, 5)
+        foreach ($unsafeZ in @('0.2', '0.19')) {
+            $unsafePath = Join-Path $testDirectory "$printer-no-hop-unsafe-$unsafeZ.gcode"
+            $unsafeSource = (New-TestGcode $printer -layerHeight 0.08 -travelLift 0) -replace '(?m)^G1 X100 Y100 Z0\.28 F12000$', "G1 X100 Y100 Z$unsafeZ F12000"
+            [IO.File]::WriteAllText($unsafePath, $unsafeSource)
+            $hashBefore = (Get-FileHash -LiteralPath $unsafePath).Hash
+            Invoke-Processor $scriptPath $unsafePath $noHopOptions 'Unsafe next-layer travel target'
+            Assert-Equal (Get-FileHash -LiteralPath $unsafePath).Hash $hashBefore "$printer unsafe no-hop $unsafeZ preserves file"
+
+            $unsafeResumePath = Join-Path $testDirectory "$printer-no-hop-unsafe-resume-$unsafeZ.gcode"
+            $unsafeResumeSource = (New-TestGcode $printer -layerHeight 0.08 -travelLift 0) -replace '(?m)^G1 X100 Y100 Z0\.28 F12000$', "G1 Z$unsafeZ F1200`nG1 X100 Y100 Z0.28 F12000"
+            [IO.File]::WriteAllText($unsafeResumePath, $unsafeResumeSource)
+            $hashBefore = (Get-FileHash -LiteralPath $unsafeResumePath).Hash
+            Invoke-Processor $scriptPath $unsafeResumePath $noHopOptions 'Unsafe travel height after layer wipe'
+            Assert-Equal (Get-FileHash -LiteralPath $unsafeResumePath).Hash $hashBefore "$printer unsafe resume $unsafeZ preserves file"
+
+            $tamperedPath = Join-Path $testDirectory "$printer-no-hop-tampered-$unsafeZ.gcode"
+            $tamperedSource = $noHopProcessed -replace '(?m)^(; NOZZLE_WIPE_RESUME layer_index=1 travel_Z=)[\d.]+( travel_feed=[\d.]+\r?\nG1 Z)[\d.]+( F1200)', "`${1}$unsafeZ`${2}$unsafeZ`${3}"
+            [IO.File]::WriteAllText($tamperedPath, $tamperedSource)
+            $hashBefore = (Get-FileHash -LiteralPath $tamperedPath).Hash
+            Invoke-Processor $scriptPath $tamperedPath $noHopOptions 'Incomplete next-layer Z resume'
+            Assert-Equal (Get-FileHash -LiteralPath $tamperedPath).Hash $hashBefore "$printer unsafe no-hop $unsafeZ upload preserves file"
+        }
         # Removing the fixed minimum must still reject invalid or out-of-range Z.
         Test-RejectedHeight $scriptPath "$printer-zero-height" (New-TestGcode $printer -firstLayerHeight 0)
         Test-RejectedHeight $scriptPath "$printer-negative-height" (New-TestGcode $printer -firstLayerHeight -0.08)
