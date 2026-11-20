@@ -62,6 +62,10 @@ If validation fails, the script reports an error instead of modifying the G-code
    C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcessP2s.ps1" -LayerInterval 20
    ```
 
+   ```text
+   C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "D:\YOUR_PATH_HERE\ImplementWipePostProcessP2s.ps1" -EarlyWipeAfterLayers 5 -LayerInterval 367 -WipeBeforeTop 0 -WipeBeforeTopmost 0
+   ```
+
    Bambu Studio automatically appends the path to the sliced G-code as the last argument.
 
 5. Save the profile. When opening another 3MF project, make sure this Process profile is selected before clicking **Slice plate** and **Print plate**.
