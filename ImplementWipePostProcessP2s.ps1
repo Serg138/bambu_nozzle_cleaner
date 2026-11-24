@@ -23,9 +23,10 @@ function Parse-Number([string] $value) {
 function Format-Number([double] $value) {
     $value.ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
 }
-function Get-Header([string] $key) {
+function Get-Header([string] $key, [switch] $allowMissing) {
     $pattern = '(?m)^; ' + [regex]::Escape($key) + ' = ([^\r\n]*)\r?$'
     $matches = [regex]::Matches($gcode, $pattern)
+    if ($allowMissing -and $matches.Count -eq 0) { return }
     if ($matches.Count -ne 1) { throw "Expected exactly one G-code setting: $key" }
     $matches[0].Groups[1].Value.Trim()
 }
@@ -69,9 +70,11 @@ if ($declaredLayerCount -lt 1 -or $actualLayerCount -ne $declaredLayerCount) {
 if ($WipeRetractMm -ne '') {
     $targetRetract = Parse-Number $WipeRetractMm
 } else {
-    # The filament override takes precedence over the printer's base value.
-    $profileRetract = Get-Header 'filament_retraction_length'
-    if ($profileRetract -eq 'nil') { $profileRetract = Get-Header 'retraction_length' }
+    # Studio can omit unset filament overrides from the exported config.
+    $profileRetract = Get-Header 'filament_retraction_length' -allowMissing
+    if ($null -eq $profileRetract -or $profileRetract -eq 'nil') {
+        $profileRetract = Get-Header 'retraction_length'
+    }
     $targetRetract = Parse-Number $profileRetract
 }
 if ([double]::IsNaN($targetRetract) -or [double]::IsInfinity($targetRetract) -or

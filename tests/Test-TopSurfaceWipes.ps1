@@ -25,6 +25,7 @@ function New-TestGcode([string] $printer, [int[]] $topLayers = @(0, 1, 2, 4), [i
         '; spiral_mode = 0',
         '; use_firmware_retraction = 0',
         '; filament_retraction_length = 0.4',
+        '; retraction_length = 0.8',
         "; total layer number: $layerCount",
         'G21', 'G90', 'M83', 'M204 S1000', "G1 X100 Y100 Z$firstHeight F1200"
     )) { $lines.Add($line) }
@@ -144,6 +145,26 @@ try {
         $scriptPath = Join-Path $repoRoot "ImplementWipePostProcess$printer.ps1"
         $source = New-TestGcode $printer
         $defaultPath = Test-Case $scriptPath "$printer-default" $source @() @(4)
+        $defaultGcode = [IO.File]::ReadAllText($defaultPath)
+        Assert-Equal ($defaultGcode -match '(?m)^; NOZZLE_WIPE_BEGIN .* retract_mm=0\.4 ') $true "$printer filament retract takes precedence"
+
+        $filamentRetractLine = '; filament_retraction_length = 0.4'
+        $withoutOverride = $source.Replace("$filamentRetractLine`n", '')
+        $fallbackPath = Test-Case $scriptPath "$printer-base-retract" $withoutOverride @() @(4)
+        $fallbackGcode = [IO.File]::ReadAllText($fallbackPath)
+        Assert-Equal ($fallbackGcode -match '(?m)^; NOZZLE_WIPE_BEGIN .* retract_mm=0\.8 ') $true "$printer missing filament retract uses base"
+
+        $nilSource = $source.Replace($filamentRetractLine, '; filament_retraction_length = nil')
+        $nilPath = Test-Case $scriptPath "$printer-nil-retract" $nilSource @() @(4)
+        $nilGcode = [IO.File]::ReadAllText($nilPath)
+        Assert-Equal ($nilGcode.Replace('; filament_retraction_length = nil' + "`n", '')) $fallbackGcode "$printer nil and missing filament retract agree"
+
+        $duplicatePath = Join-Path $testDirectory "$printer-duplicate-retract.gcode"
+        $duplicateSource = $source.Replace($filamentRetractLine, "$filamentRetractLine`n$filamentRetractLine")
+        [IO.File]::WriteAllText($duplicatePath, $duplicateSource)
+        Invoke-Processor $scriptPath $duplicatePath @() 'Expected exactly one G-code setting: filament_retraction_length'
+        Assert-Equal ([IO.File]::ReadAllText($duplicatePath)) $duplicateSource "$printer duplicate filament retract preserves file"
+
         foreach ($top in @(0, 1)) {
             foreach ($topmost in @(0, 1)) {
                 $expected = if ($top -eq 1) { @(2, 4) } elseif ($topmost -eq 1) { @(4) } else { @() }
